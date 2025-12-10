@@ -1169,27 +1169,33 @@ Cette architecture modulaire permet une meilleure séparation des préoccupation
 ```
 
 **Prologue (lignes 8049196-8049197) :**
-- `push %ebp` : Sauvegarde EBP
-- `mov %esp,%ebp` : Établit le frame pointer
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+  - Note : Pas d'allocation de pile (`sub $x,%esp`) car pas de variables locales
+  - Pas de stack canary car la fonction est simple sans buffer
 
 **Corps de la fonction (lignes 8049199-80491b6) :**
-- `push $0x7` : Empile 7 (longueur à comparer)
-- `push 0x8(%ebp)` : Empile le pointeur vers l'entrée utilisateur (paramètre)
-- `push $0x804a008` : Empile l'adresse de "ajacobe"
-- `call strncmp@plt` : Compare les 7 premiers caractères
-- `add $0xc,%esp` : Nettoie les arguments
-- `test %eax,%eax` : Teste le résultat
-- `jne 80491b6` : Si différent, retourne 0
-- `mov $0x1,%eax` : Met 1 (succès)
-- `jmp 80491bb` : Saute à l'épilogue
-- `mov $0x0,%eax` : Ou met 0 (échec)
+- `push $0x7` : Empile 7 (0x07) comme 3ème argument de strncmp (nombre d'octets à comparer)
+- `push 0x8(%ebp)` : Empile le pointeur vers l'entrée utilisateur (1er paramètre de check_username, à EBP+8)
+- `push $0x804a008` : Empile l'adresse 0x804a008 (où se trouve "ajacobe") comme 2ème argument
+- `call strncmp@plt` : Appelle strncmp(input, "ajacobe", 7) via la PLT
+- `add $0xc,%esp` : Nettoie les 3 arguments de la pile (3 × 4 = 12 = 0x0c octets)
+- `test %eax,%eax` : Teste le résultat de strncmp (EAX AND EAX, modifie les flags)
+  - strncmp retourne 0 si égal, non-0 si différent
+- `jne 80491b6` : Si non égal (ZF=0), saute à l'adresse 80491b6 (retourne 0)
+- `mov $0x1,%eax` : Met 1 dans EAX (succès - les chaînes sont égales)
+- `jmp 80491bb` : Saute inconditionnellement à l'épilogue
+- **Bloc d'échec (ligne 80491b6) :**
+  - `mov $0x0,%eax` : Met 0 dans EAX (échec - les chaînes sont différentes)
 
 **Épilogue (lignes 80491bb-80491bc) :**
-- `leave` : Restaure le frame
-- `ret` : Retourne (0 ou 1 dans EAX)
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure ESP à sa valeur avant l'appel
+  - Restaure l'ancien EBP depuis la pile
+- `ret` : Retourne à l'appelant (avec 0 ou 1 dans EAX)
 
 **Explication :**
-Fonction simple qui compare le username avec "ajacobe" (7 caractères). Pas de stack canary car pas de buffer local.
+Fonction simple qui compare le username avec "ajacobe" (7 caractères). Pas de stack canary car pas de buffer local ni d'opérations sensibles sur la pile.
 
 ---
 
@@ -1214,20 +1220,31 @@ Fonction simple qui compare le username avec "ajacobe" (7 caractères). Pas de s
  80491e3:	c3                   	ret
 ```
 
-**Prologue :** Identique à check_username
+**Prologue (lignes 80491bd-80491be) :**
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+  - Même structure que check_username : pas d'allocation locale ni de canary
 
-**Corps de la fonction :**
-- `push $0xc` : Empile 12 (0x0c) (longueur à comparer)
-- `push 0x8(%ebp)` : Empile le pointeur vers l'entrée utilisateur
-- `push $0x804a010` : Empile l'adresse de "BPYWHwivoYmi"
-- `call strncmp@plt` : Compare les 12 premiers caractères
-- `add $0xc,%esp` : Nettoie
-- Test et retour identique à check_username
+**Corps de la fonction (lignes 80491c0-80491dd) :**
+- `push $0xc` : Empile 12 (0x0c) comme 3ème argument (12 caractères à comparer)
+- `push 0x8(%ebp)` : Empile le pointeur vers l'entrée utilisateur (paramètre à EBP+8)
+- `push $0x804a010` : Empile l'adresse 0x804a010 (où se trouve "BPYWHwivoYmi")
+- `call strncmp@plt` : Appelle strncmp(input, "BPYWHwivoYmi", 12)
+- `add $0xc,%esp` : Nettoie les 3 arguments (12 octets)
+- `test %eax,%eax` : Teste le résultat de strncmp
+- `jne 80491dd` : Si différent (ZF=0), saute au bloc d'échec
+- `mov $0x1,%eax` : Met 1 dans EAX (succès)
+- `jmp 80491e2` : Saute à l'épilogue
+- **Bloc d'échec (ligne 80491dd) :**
+  - `mov $0x0,%eax` : Met 0 dans EAX (échec)
 
-**Épilogue :** Identique à check_username
+**Épilogue (lignes 80491e2-80491e3) :**
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure ESP et récupère l'ancien EBP
+- `ret` : Retourne à l'appelant (valeur de retour dans EAX)
 
 **Explication :**
-Même structure que check_username, mais compare 12 caractères avec "BPYWHwivoYmi".
+Même structure que check_username, mais compare 12 caractères avec "BPYWHwivoYmi". Les trois fonctions de vérification (username, password, totp) partagent la même architecture simple sans variables locales.
 
 ---
 
@@ -1252,13 +1269,31 @@ Même structure que check_username, mais compare 12 caractères avec "BPYWHwivoY
  804920a:	c3                   	ret
 ```
 
-**Prologue, Corps, Épilogue :** Identique aux fonctions précédentes
+**Prologue (lignes 80491e4-80491e5) :**
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+  - Même architecture simple que les deux fonctions précédentes
 
-**Différence :**
-- Compare 6 caractères avec "816201" stocké à 0x804a01d
+**Corps de la fonction (lignes 80491e7-8049204) :**
+- `push $0x6` : Empile 6 comme 3ème argument (6 caractères à comparer)
+- `push 0x8(%ebp)` : Empile le pointeur vers l'entrée utilisateur (paramètre à EBP+8)
+- `push $0x804a01d` : Empile l'adresse 0x804a01d (où se trouve "816201")
+- `call strncmp@plt` : Appelle strncmp(input, "816201", 6)
+- `add $0xc,%esp` : Nettoie les 3 arguments de la pile (12 octets)
+- `test %eax,%eax` : Teste le résultat de strncmp
+- `jne 8049204` : Si différent (ZF=0), saute au bloc d'échec
+- `mov $0x1,%eax` : Met 1 dans EAX (succès - code TOTP valide)
+- `jmp 8049209` : Saute à l'épilogue
+- **Bloc d'échec (ligne 8049204) :**
+  - `mov $0x0,%eax` : Met 0 dans EAX (échec - code TOTP invalide)
+
+**Épilogue (lignes 8049209-804920a) :**
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure le stack frame
+- `ret` : Retourne à l'appelant (0 ou 1 dans EAX)
 
 **Explication :**
-Vérifie le code TOTP (6 chiffres). TOTP = Time-based One-Time Password, un code temporaire souvent utilisé pour l'authentification à deux facteurs (2FA).
+Vérifie le code TOTP (6 chiffres). TOTP = Time-based One-Time Password, un code temporaire souvent utilisé pour l'authentification à deux facteurs (2FA). Cette fonction a la même structure que check_username et check_password, seule la longueur de comparaison diffère (6 au lieu de 7 ou 12).
 
 ---
 
@@ -1361,8 +1396,22 @@ Vérifie le code TOTP (6 chiffres). TOTP = Time-based One-Time Password, un code
 ```
 
 **Prologue (lignes 804920b-8049220) :**
-- Alloue 80 octets (0x50) sur la pile
-- Configure le stack canary
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+- `sub $0x50,%esp` : Alloue 80 octets (0x50) sur la pile pour les variables locales
+  - Grande allocation pour stocker trois buffers séparés pour les trois inputs
+- `mov 0xc(%ebp),%eax` : Récupère argv (2ème paramètre de main) depuis EBP+0x0c
+- `mov %eax,-0x50(%ebp)` : Sauvegarde argv à EBP-0x50
+- `mov %gs:0x14,%eax` : Lit le stack canary depuis le Thread Local Storage (segment GS, offset 0x14)
+- `mov %eax,-0x4(%ebp)` : Stocke le canary à EBP-0x4 (haut de la pile locale)
+- `xor %eax,%eax` : Met EAX à zéro pour éviter les fuites du canary en mémoire
+
+**Organisation de la pile locale :**
+- EBP-0x04 : Stack canary (protection buffer overflow)
+- EBP-0x24 : Buffer password (32 octets)
+- EBP-0x44 : Buffer username (32 octets)
+- EBP-0x4c : Buffer TOTP (8 octets)
+- EBP-0x50 : Sauvegarde de argv
 
 **Corps - Lecture des 3 entrées (lignes 8049222-8049282) :**
 1. Affiche "User? " et lit dans le buffer à EBP-0x44
@@ -1382,7 +1431,16 @@ Vérifie le code TOTP (6 chiffres). TOTP = Time-based One-Time Password, un code
 Trois blocs distincts pour afficher les messages d'erreur appropriés.
 
 **Épilogue (lignes 80492ef-8049306) :**
-Standard avec vérification du stack canary.
+- `mov $0x0,%eax` : Met 0 dans EAX (valeur de retour de main)
+- `mov -0x4(%ebp),%edx` : Récupère le stack canary sauvegardé à EBP-0x4
+- `sub %gs:0x14,%edx` : Soustrait le canary original du TLS
+  - Si la pile n'a pas été corrompue, EDX devrait maintenant contenir 0
+- `je 8049305` : Si égal (ZF=1, EDX=0), saute à l'instruction leave (pile intacte)
+- `call __stack_chk_fail@plt` : Sinon, appelle __stack_chk_fail pour terminer le programme
+  - Cette fonction ne retourne jamais, elle appelle abort()
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure le stack frame avant de retourner
+- `ret` : Retourne à l'appelant (retour au système d'exploitation)
 
 **Explication :**
 Architecture en **cascade** : chaque vérification doit réussir pour passer à la suivante. C'est une implémentation typique d'un système MFA (Multi-Factor Authentication). Si une vérification échoue, le programme affiche un message d'erreur spécifique indiquant quel facteur a échoué.
@@ -1547,7 +1605,16 @@ App05 utilise une technique d'**échantillonnage** : seuls certains caractères 
  8049208:	c3                   	ret
 ```
 
-**Prologue :** Standard avec stack canary et allocation de 28 octets (0x1c)
+**Prologue (lignes 8049186-804919b) :**
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+- `sub $0x1c,%esp` : Alloue 28 octets (0x1c) sur la pile pour les variables locales
+  - Nécessaire pour stocker le mot de passe complet (12 octets) + compteurs + canary
+- `mov 0x8(%ebp),%eax` : Récupère le paramètre input (pointeur vers la chaîne saisie)
+- `mov %eax,-0x1c(%ebp)` : Sauvegarde le pointeur input à EBP-0x1c
+- `mov %gs:0x14,%eax` : Lit le stack canary depuis le Thread Local Storage
+- `mov %eax,-0x4(%ebp)` : Stocke le canary à EBP-0x4 (protection buffer overflow)
+- `xor %eax,%eax` : Met EAX à zéro pour éviter les fuites du canary
 
 **Corps - Construction du mot de passe :**
 Le mot de passe complet "tkjeF6xGXWz+" (12 caractères) est construit sur la pile
@@ -1572,7 +1639,16 @@ i=5: input[5] == password[10] → 'z'
 ```
 Mot de passe attendu : **tjFxXz** (6 caractères, positions paires uniquement)
 
-**Épilogue :** Standard avec vérification du canary
+**Épilogue (lignes 80491f6-8049208) :**
+- `mov -0x4(%ebp),%edx` : Récupère le stack canary sauvegardé à EBP-0x4
+- `sub %gs:0x14,%edx` : Soustrait le canary original du TLS
+  - Si EDX = 0 après cette opération, la pile est intacte
+- `je 8049207` : Si égal (ZF=1), saute à l'instruction leave (pas de corruption)
+- `call __stack_chk_fail@plt` : Sinon, appelle __stack_chk_fail pour terminer
+  - Protection contre buffer overflow détecté
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure le stack frame
+- `ret` : Retourne à l'appelant (avec 0 ou 1 dans EAX)
 
 **Explication :**
 Technique d'obfuscation par échantillonnage : le programme stocke un mot de passe de 12 caractères mais n'en vérifie que 6 (1 sur 2). L'incrémentation `j += 2` est la clé de cette technique.
@@ -1728,7 +1804,16 @@ App06 utilise le **chiffrement XOR** avec une clé constante (0x21) pour obfusqu
  8049200:	c3                   	ret
 ```
 
-**Prologue :** Standard avec stack canary
+**Prologue (lignes 8049186-804919b) :**
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+- `sub $0x18,%esp` : Alloue 24 octets (0x18) sur la pile
+  - Espace pour le mot de passe chiffré (12 octets) + compteur + canary + pointeur input
+- `mov 0x8(%ebp),%eax` : Récupère le paramètre input (pointeur vers la chaîne saisie)
+- `mov %eax,-0x18(%ebp)` : Sauvegarde le pointeur input à EBP-0x18
+- `mov %gs:0x14,%eax` : Lit le stack canary depuis le Thread Local Storage
+- `mov %eax,-0x4(%ebp)` : Stocke le canary à EBP-0x4
+- `xor %eax,%eax` : Met EAX à zéro pour éviter les fuites du canary
 
 **Corps - Stockage du mot de passe chiffré :**
 Le mot de passe est stocké sous forme chiffrée : `44 6d 58 69 18 77 7b 49 62 54 5b 51`
@@ -1763,7 +1848,16 @@ Octets chiffrés : 44 6d 58 69 18 77 7b 49 62 54 5b 51
 Mot de passe : eLyH9VZhCuzp
 ```
 
-**Épilogue :** Standard avec vérification du canary
+**Épilogue (lignes 80491ee-8049200) :**
+- `mov -0x4(%ebp),%edx` : Récupère le stack canary sauvegardé à EBP-0x4
+- `sub %gs:0x14,%edx` : Soustrait le canary original du TLS
+  - Si EDX = 0, la pile n'a pas été corrompue
+- `je 80491ff` : Si égal (ZF=1), saute à l'instruction leave (pile intacte)
+- `call __stack_chk_fail@plt` : Sinon, appelle __stack_chk_fail
+  - Protection contre buffer overflow - termine le programme
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure le stack frame
+- `ret` : Retourne à l'appelant (avec 0 ou 1 dans EAX)
 
 **Explication :**
 XOR (eXclusive OR) est une opération réversible : `A XOR K = B` et `B XOR K = A`. Ici, le mot de passe est stocké chiffré avec la clé 0x21, puis déchiffré à la volée lors de la comparaison. Cette technique empêche de trouver le mot de passe avec `strings` car il n'est jamais stocké en clair.
@@ -1939,7 +2033,18 @@ App07 utilise un **double XOR** : le mot de passe est obtenu en faisant XOR entr
  8049215:	c3                   	ret
 ```
 
-**Prologue :** Standard avec sauvegarde de EBX (utilisé dans le XOR)
+**Prologue (lignes 8049186-804919c) :**
+- `push %ebp` : Sauvegarde l'ancien frame pointer sur la pile
+- `mov %esp,%ebp` : Établit le nouveau frame pointer (EBP = ESP)
+- `push %ebx` : Sauvegarde EBX car ce registre sera utilisé dans le corps de la fonction
+  - Convention d'appel x86 : EBX est un registre préservé qui doit être sauvegardé
+- `sub $0x1c,%esp` : Alloue 28 octets (0x1c) sur la pile
+  - Espace pour les deux clés (16 octets) + compteur + canary + pointeur input
+- `mov 0x8(%ebp),%eax` : Récupère le paramètre input (pointeur vers la chaîne saisie)
+- `mov %eax,-0x20(%ebp)` : Sauvegarde le pointeur input à EBP-0x20
+- `mov %gs:0x14,%eax` : Lit le stack canary depuis le Thread Local Storage
+- `mov %eax,-0x8(%ebp)` : Stocke le canary à EBP-0x8
+- `xor %eax,%eax` : Met EAX à zéro pour éviter les fuites du canary
 
 **Corps - Stockage des deux clés :**
 ```
@@ -1972,7 +2077,18 @@ i=7: 0x32 XOR 0x01 = 0x33 = '3'
 Mot de passe : yh6Naqz3
 ```
 
-**Épilogue :** Standard avec restauration de EBX
+**Épilogue (lignes 8049200-8049215) :**
+- `mov -0x8(%ebp),%edx` : Récupère le stack canary sauvegardé à EBP-0x8
+- `sub %gs:0x14,%edx` : Soustrait le canary original du TLS
+  - Si EDX = 0 après soustraction, la pile est intacte
+- `je 8049211` : Si égal (ZF=1), saute à l'instruction de restauration de EBX
+- `call __stack_chk_fail@plt` : Sinon, appelle __stack_chk_fail
+  - Protection contre buffer overflow - termine le programme
+- `mov -0x4(%ebp),%ebx` : Restaure l'ancienne valeur de EBX depuis EBP-0x4
+  - Nécessaire car EBX est un registre préservé (callee-saved)
+- `leave` : Équivalent à `mov %ebp,%esp` puis `pop %ebp`
+  - Restaure le stack frame et récupère l'ancien EBP
+- `ret` : Retourne à l'appelant (avec 0 ou 1 dans EAX)
 
 **Explication :**
 Technique d'obfuscation avancée : le mot de passe n'est **jamais** stocké en mémoire, même chiffré ! Au lieu de cela, deux clés distinctes sont stockées, et le mot de passe est calculé à la volée par XOR entre ces deux clés. Cette technique rend l'analyse statique très difficile :
